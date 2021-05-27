@@ -7,9 +7,10 @@
 import torch
 import torch.nn as nn
 from typing import List, Tuple
+from basic import BiConv2d, BiConv2dLSR
+
 
 class SharedMLP(nn.Sequential):
-
     def __init__(
             self,
             args: List[int],
@@ -18,7 +19,7 @@ class SharedMLP(nn.Sequential):
             activation=nn.ReLU(inplace=True),
             preact: bool = False,
             first: bool = False,
-            name: str = ""
+            name: str = "",
     ):
         super().__init__()
 
@@ -31,13 +32,40 @@ class SharedMLP(nn.Sequential):
                     bn=(not first or not preact or (i != 0)) and bn,
                     activation=activation
                     if (not first or not preact or (i != 0)) else None,
-                    preact=preact
+                    preact=preact,
+                )
+            )
+
+
+class BiSharedMLP(nn.Sequential):
+    def __init__(
+            self,
+            args: List[int],
+            *,
+            bn: bool = False,
+            activation=nn.ReLU(inplace=True),
+            preact: bool = False,
+            first: bool = False,
+            name: str = "",
+            lsr=False
+    ):
+        super().__init__()
+        for i in range(len(args) - 1):
+            self.add_module(
+                name + 'layer{}'.format(i),
+                biConv2d(
+                    args[i],
+                    args[i + 1],
+                    bn=(not first or not preact or (i != 0)) and bn,
+                    activation=activation
+                    if (not first or not preact or (i != 0)) else None,
+                    preact=preact,
+                    lsr=lsr,
                 )
             )
 
 
 class _BNBase(nn.Sequential):
-
     def __init__(self, in_size, batch_norm=None, name=""):
         super().__init__()
         self.add_module(name + "bn", batch_norm(in_size))
@@ -65,7 +93,6 @@ class BatchNorm3d(_BNBase):
 
 
 class _ConvBase(nn.Sequential):
-
     def __init__(
             self,
             in_size,
@@ -121,7 +148,6 @@ class _ConvBase(nn.Sequential):
 
 
 class Conv1d(_ConvBase):
-
     def __init__(
             self,
             in_size: int,
@@ -155,7 +181,6 @@ class Conv1d(_ConvBase):
 
 
 class Conv2d(_ConvBase):
-
     def __init__(
             self,
             in_size: int,
@@ -186,6 +211,57 @@ class Conv2d(_ConvBase):
             preact=preact,
             name=name
         )
+
+
+class biConv2d(_ConvBase):
+    def __init__(
+            self,
+            in_size: int,
+            out_size: int,
+            *,
+            kernel_size: Tuple[int, int] = (1, 1),
+            stride: Tuple[int, int] = (1, 1),
+            padding: Tuple[int, int] = (0, 0),
+            activation=nn.ReLU(inplace=True),
+            bn: bool = False,
+            init=nn.init.kaiming_normal_,
+            bias: bool = True,
+            preact: bool = False,
+            name: str = "",
+            lsr=False
+    ):
+        if lsr:
+            super().__init__(
+                in_size,
+                out_size,
+                kernel_size,
+                stride,
+                padding,
+                activation,
+                bn,
+                init,
+                conv=BiConv2dLSR,
+                batch_norm=BatchNorm2d,
+                bias=bias,
+                preact=preact,
+                name=name
+            )
+        else:
+            super().__init__(
+                in_size,
+                out_size,
+                kernel_size,
+                stride,
+                padding,
+                activation,
+                bn,
+                init,
+                conv=BiConv2d,
+                batch_norm=BatchNorm2d,
+                bias=bias,
+                preact=preact,
+                name=name
+            )
 
 
 class Conv3d(_ConvBase):
@@ -258,6 +334,7 @@ class FC(nn.Sequential):
 
             if activation is not None:
                 self.add_module(name + 'activation', activation)
+
 
 def set_bn_momentum_default(bn_momentum):
 

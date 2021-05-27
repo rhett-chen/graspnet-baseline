@@ -15,16 +15,16 @@ import torch.nn.functional as F
 
 import os
 import sys
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
-
+from basic import BiLinear, BiLinearXNOR, BiLinearIRNet, BiLinearLSR, MLP, BiMLP, BwMLP, FirstBiMLP
 import pointnet2_utils
 import pytorch_utils as pt_utils
 from typing import List
 
 
 class _PointnetSAModuleBase(nn.Module):
-
     def __init__(self):
         super().__init__()
         self.npoint = None
@@ -100,7 +100,7 @@ class PointnetSAModuleMSG(_PointnetSAModuleBase):
             nsamples: List[int],
             mlps: List[List[int]],
             bn: bool = True,
-            use_xyz: bool = True, 
+            use_xyz: bool = True,
             sample_uniformly: bool = False
     ):
         super().__init__()
@@ -162,8 +162,8 @@ class PointnetSAModule(PointnetSAModuleMSG):
 
 
 class PointnetSAModuleVotes(nn.Module):
-    ''' Modified based on _PointnetSAModuleBase and PointnetSAModuleMSG
-    with extra support for returning point indices for getting their GT votes '''
+    """ Modified based on _PointnetSAModuleBase and PointnetSAModuleMSG
+    with extra support for returning point indices for getting their GT votes """
 
     def __init__(
             self,
@@ -175,10 +175,11 @@ class PointnetSAModuleVotes(nn.Module):
             bn: bool = True,
             use_xyz: bool = True,
             pooling: str = 'max',
-            sigma: float = None, # for RBF pooling
-            normalize_xyz: bool = False, # noramlize local XYZ with radius
+            sigma: float = None,  # for RBF pooling
+            normalize_xyz: bool = False,  # noramlize local XYZ with radius
             sample_uniformly: bool = False,
-            ret_unique_cnt: bool = False
+            ret_unique_cnt: bool = False,
+            binary='None'
     ):
         super().__init__()
 
@@ -190,22 +191,33 @@ class PointnetSAModuleVotes(nn.Module):
         self.use_xyz = use_xyz
         self.sigma = sigma
         if self.sigma is None:
-            self.sigma = self.radius/2
+            self.sigma = self.radius / 2
         self.normalize_xyz = normalize_xyz
         self.ret_unique_cnt = ret_unique_cnt
 
         if npoint is not None:
             self.grouper = pointnet2_utils.QueryAndGroup(radius, nsample,
-                use_xyz=use_xyz, ret_grouped_xyz=True, normalize_xyz=normalize_xyz,
-                sample_uniformly=sample_uniformly, ret_unique_cnt=ret_unique_cnt)
+                                                         use_xyz=use_xyz, ret_grouped_xyz=True,
+                                                         normalize_xyz=normalize_xyz,
+                                                         sample_uniformly=sample_uniformly,
+                                                         ret_unique_cnt=ret_unique_cnt)
         else:
             self.grouper = pointnet2_utils.GroupAll(use_xyz, ret_grouped_xyz=True)
 
         mlp_spec = mlp
-        if use_xyz and len(mlp_spec)>0:
+        if use_xyz and len(mlp_spec) > 0:
             mlp_spec[0] += 3
-        self.mlp_module = pt_utils.SharedMLP(mlp_spec, bn=bn)
 
+        if binary == 'None':
+            self.mlp_module = pt_utils.SharedMLP(mlp_spec, bn=bn)
+        elif binary == 'BiMLP':
+            self.mlp_module = BiMLP(mlp_spec, BiLinear=BiLinearLSR)
+        elif binary == 'BiSharedMLP':
+            self.mlp_module = pt_utils.BiSharedMLP(mlp_spec, bn=bn, lsr=False)
+        elif binary == 'BiLSRSharedMLP':
+            self.mlp_module = pt_utils.BiSharedMLP(mlp_spec, bn=bn, lsr=True)
+        else:
+            raise NotImplementedError
 
     def forward(self, xyz: torch.Tensor,
                 features: torch.Tensor = None,
@@ -234,7 +246,7 @@ class PointnetSAModuleVotes(nn.Module):
         if inds is None:
             inds = pointnet2_utils.furthest_point_sample(xyz, self.npoint)
         else:
-            assert(inds.shape[1] == self.npoint)
+            assert (inds.shape[1] == self.npoint)
         new_xyz = pointnet2_utils.gather_operation(
             xyz_flipped, inds
         ).transpose(1, 2).contiguous() if self.npoint is not None else None
@@ -259,17 +271,20 @@ class PointnetSAModuleVotes(nn.Module):
             new_features = F.avg_pool2d(
                 new_features, kernel_size=[1, new_features.size(3)]
             )  # (B, mlp[-1], npoint, 1)
-        elif self.pooling == 'rbf': 
+        elif self.pooling == 'rbf':
             # Use radial basis function kernel for weighted sum of features (normalized by nsample and sigma)
             # Ref: https://en.wikipedia.org/wiki/Radial_basis_function_kernel
-            rbf = torch.exp(-1 * grouped_xyz.pow(2).sum(1,keepdim=False) / (self.sigma**2) / 2) # (B, npoint, nsample)
-            new_features = torch.sum(new_features * rbf.unsqueeze(1), -1, keepdim=True) / float(self.nsample) # (B, mlp[-1], npoint, 1)
+            rbf = torch.exp(
+                -1 * grouped_xyz.pow(2).sum(1, keepdim=False) / (self.sigma ** 2) / 2)  # (B, npoint, nsample)
+            new_features = torch.sum(new_features * rbf.unsqueeze(1), -1, keepdim=True) / float(
+                self.nsample)  # (B, mlp[-1], npoint, 1)
         new_features = new_features.squeeze(-1)  # (B, mlp[-1], npoint)
 
         if not self.ret_unique_cnt:
             return new_xyz, new_features, inds
         else:
             return new_xyz, new_features, inds, unique_cnt
+
 
 class PointnetSAModuleMSGVotes(nn.Module):
     ''' Modified based on _PointnetSAModuleBase and PointnetSAModuleMSG
@@ -288,7 +303,7 @@ class PointnetSAModuleMSGVotes(nn.Module):
     ):
         super().__init__()
 
-        assert(len(mlps) == len(nsamples) == len(radii))
+        assert (len(mlps) == len(nsamples) == len(radii))
 
         self.npoint = npoint
         self.groupers = nn.ModuleList()
@@ -364,9 +379,19 @@ class PointnetFPModule(nn.Module):
         Use batchnorm
     """
 
-    def __init__(self, *, mlp: List[int], bn: bool = True):
+    def __init__(self, *, mlp: List[int], bn: bool = True, binary='None'):
         super().__init__()
-        self.mlp = pt_utils.SharedMLP(mlp, bn=bn)
+        if binary == 'None':
+            self.mlp = pt_utils.SharedMLP(mlp, bn=bn)
+        elif binary == 'BiMLP':
+            self.mlp = BiMLP(mlp, BiLinear=BiLinearLSR)
+        elif binary == 'BiSharedMLP':
+            self.mlp = pt_utils.BiSharedMLP(mlp, bn=bn, lsr=False)
+        elif binary == 'BiLSRSharedMLP':
+            self.mlp = pt_utils.BiSharedMLP(mlp, bn=bn, lsr=True)
+        else:
+            raise NotImplementedError
+        # self.mlp = pt_utils.SharedMLP(mlp, bn=bn)
 
     def forward(
             self, unknown: torch.Tensor, known: torch.Tensor,
@@ -406,7 +431,7 @@ class PointnetFPModule(nn.Module):
 
         if unknow_feats is not None:
             new_features = torch.cat([interpolated_feats, unknow_feats],
-                                   dim=1)  #(B, C2 + C1, n)
+                                     dim=1)  # (B, C2 + C1, n)
         else:
             new_features = interpolated_feats
 
@@ -414,6 +439,7 @@ class PointnetFPModule(nn.Module):
         new_features = self.mlp(new_features)
 
         return new_features.squeeze(-1)
+
 
 class PointnetLFPModuleMSG(nn.Module):
     ''' Modified based on _PointnetSAModuleBase and PointnetSAModuleMSG
@@ -432,8 +458,8 @@ class PointnetLFPModuleMSG(nn.Module):
     ):
         super().__init__()
 
-        assert(len(mlps) == len(nsamples) == len(radii))
-        
+        assert (len(mlps) == len(nsamples) == len(radii))
+
         self.post_mlp = pt_utils.SharedMLP(post_mlp, bn=bn)
 
         self.groupers = nn.ModuleList()
@@ -443,7 +469,7 @@ class PointnetLFPModuleMSG(nn.Module):
             nsample = nsamples[i]
             self.groupers.append(
                 pointnet2_utils.QueryAndGroup(radius, nsample, use_xyz=use_xyz,
-                    sample_uniformly=sample_uniformly)
+                                              sample_uniformly=sample_uniformly)
             )
             mlp_spec = mlps[i]
             if use_xyz:
@@ -486,7 +512,7 @@ class PointnetLFPModuleMSG(nn.Module):
 
             if features2 is not None:
                 new_features = torch.cat([new_features, features2],
-                                           dim=1)  #(B, mlp[-1] + C2, N2)
+                                         dim=1)  # (B, mlp[-1] + C2, N2)
 
             new_features = new_features.unsqueeze(-1)
             new_features = self.post_mlp(new_features)
@@ -498,6 +524,7 @@ class PointnetLFPModuleMSG(nn.Module):
 
 if __name__ == "__main__":
     from torch.autograd import Variable
+
     torch.manual_seed(1)
     torch.cuda.manual_seed_all(1)
     xyz = Variable(torch.randn(2, 9, 3).cuda(), requires_grad=True)

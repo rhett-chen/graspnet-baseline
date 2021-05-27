@@ -28,25 +28,28 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint_path', required=True, help='Model checkpoint path')
 parser.add_argument('--num_point', type=int, default=20000, help='Point Number [default: 20000]')
 parser.add_argument('--num_view', type=int, default=300, help='View Number [default: 300]')
-parser.add_argument('--collision_thresh', type=float, default=0.01, help='Collision Threshold in collision detection [default: 0.01]')
-parser.add_argument('--voxel_size', type=float, default=0.01, help='Voxel Size to process point clouds before collision detection [default: 0.01]')
+parser.add_argument('--collision_thresh', type=float, default=0.01,
+                    help='Collision Threshold in collision detection [default: 0.01]')
+parser.add_argument('--voxel_size', type=float, default=0.01,
+                    help='Voxel Size to process point clouds before collision detection [default: 0.01]')
 cfgs = parser.parse_args()
 
 
 def get_net():
     # Init the model
     net = GraspNet(input_feature_dim=0, num_view=cfgs.num_view, num_angle=12, num_depth=4,
-            cylinder_radius=0.05, hmin=-0.02, hmax_list=[0.01,0.02,0.03,0.04], is_training=False)
+                   cylinder_radius=0.05, hmin=-0.02, hmax_list=[0.01, 0.02, 0.03, 0.04], is_training=False)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     net.to(device)
     # Load checkpoint
     checkpoint = torch.load(cfgs.checkpoint_path)
     net.load_state_dict(checkpoint['model_state_dict'])
     start_epoch = checkpoint['epoch']
-    print("-> loaded checkpoint %s (epoch: %d)"%(cfgs.checkpoint_path, start_epoch))
+    print("-> loaded checkpoint %s (epoch: %d)" % (cfgs.checkpoint_path, start_epoch))
     # set model to eval mode
     net.eval()
     return net
+
 
 def get_and_process_data(data_dir):
     # load data
@@ -71,7 +74,7 @@ def get_and_process_data(data_dir):
         idxs = np.random.choice(len(cloud_masked), cfgs.num_point, replace=False)
     else:
         idxs1 = np.arange(len(cloud_masked))
-        idxs2 = np.random.choice(len(cloud_masked), cfgs.num_point-len(cloud_masked), replace=True)
+        idxs2 = np.random.choice(len(cloud_masked), cfgs.num_point - len(cloud_masked), replace=True)
         idxs = np.concatenate([idxs1, idxs2], axis=0)
     cloud_sampled = cloud_masked[idxs]
     color_sampled = color_masked[idxs]
@@ -89,6 +92,7 @@ def get_and_process_data(data_dir):
 
     return end_points, cloud
 
+
 def get_grasps(net, end_points):
     # Forward pass
     with torch.no_grad():
@@ -98,11 +102,13 @@ def get_grasps(net, end_points):
     gg = GraspGroup(gg_array)
     return gg
 
+
 def collision_detection(gg, cloud):
     mfcdetector = ModelFreeCollisionDetector(cloud, voxel_size=cfgs.voxel_size)
     collision_mask = mfcdetector.detect(gg, approach_dist=0.05, collision_thresh=cfgs.collision_thresh)
     gg = gg[~collision_mask]
     return gg
+
 
 def vis_grasps(gg, cloud):
     gg.nms()
@@ -110,6 +116,7 @@ def vis_grasps(gg, cloud):
     gg = gg[:50]
     grippers = gg.to_open3d_geometry_list()
     o3d.visualization.draw_geometries([cloud, *grippers])
+
 
 def demo(data_dir):
     net = get_net()
@@ -119,6 +126,33 @@ def demo(data_dir):
         gg = collision_detection(gg, np.array(cloud.points))
     vis_grasps(gg, cloud)
 
-if __name__=='__main__':
+
+def get_grasp_pose_my_data():
+    pc = np.load('pc.npy')
+    color = np.array(Image.open('rbg.png'), dtype=np.float32) / 255.0
+    if pc.shape[0] >= cfgs.num_point:
+        idxs = np.random.choice(pc.shape[0], cfgs.num_point, replace=False)
+    else:
+        idxs1 = np.arange(pc.shape[0])
+        idxs2 = np.random.choice(pc.shape[0], cfgs.num_point - pc.shape[0], replace=True)
+        idxs = np.concatenate([idxs1, idxs2], axis=0)
+    cloud_sampled = pc[idxs]
+    color_sampled = color[idxs]
+
+    # convert data
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(pc.astype(np.float32))
+    cloud.colors = o3d.utility.Vector3dVector(color.astype(np.float32))
+    end_points = dict()
+    cloud_sampled = torch.from_numpy(cloud_sampled[np.newaxis].astype(np.float32))
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    cloud_sampled = cloud_sampled.to(device)
+    end_points['point_clouds'] = cloud_sampled
+    end_points['cloud_colors'] = color_sampled
+
+    return end_points, cloud
+
+
+if __name__ == '__main__':
     data_dir = 'doc/example_data'
     demo(data_dir)

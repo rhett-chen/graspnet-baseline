@@ -16,14 +16,15 @@ from torch.autograd import Function
 import torch.nn as nn
 import pytorch_utils as pt_utils
 import sys
+import builtins
+# try:
+#     import builtins
+# except:
+#
+#     import __builtin__ as builtins
 
 try:
-    import builtins
-except:
-    import __builtin__ as builtins
-
-try:
-    import pointnet2._ext as _ext
+    import bi_pointnet2._ext as _ext
 except ImportError:
     if not getattr(builtins, "__POINTNET2_SETUP__", False):
         raise ImportError(
