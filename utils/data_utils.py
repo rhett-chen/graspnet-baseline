@@ -4,6 +4,7 @@
 
 import numpy as np
 
+
 class CameraInfo():
     """ Camera intrisics for point cloud creation. """
     def __init__(self, width, height, fx, fy, cx, cy, scale):
@@ -14,6 +15,7 @@ class CameraInfo():
         self.cx = cx
         self.cy = cy
         self.scale = scale
+
 
 def create_point_cloud_from_depth_image(depth, camera, organized=True):
     """ Generate point cloud using depth image only.
@@ -41,6 +43,7 @@ def create_point_cloud_from_depth_image(depth, camera, organized=True):
     if not organized:
         cloud = cloud.reshape([-1, 3])
     return cloud
+
 
 def transform_point_cloud(cloud, transform, format='4x4'):
     """ Transform points to new coordinates with transformation matrix.
@@ -87,6 +90,7 @@ def compute_point_dists(A, B):
     B = B[np.newaxis, :, :]
     dists = np.linalg.norm(A-B, axis=-1)
     return dists
+
 
 def remove_invisible_grasp_points(cloud, grasp_points, pose, th=0.01):
     """ Remove invisible part of object model according to scene point cloud.
